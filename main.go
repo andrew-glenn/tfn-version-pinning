@@ -1,20 +1,30 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"sort"
+
+	"github.com/Masterminds/semver"
+	"github.com/m7shapan/njson"
 )
 
-type ModuleVersionsResponse struct {
-	Modules []Module
+type ModuleInfo struct {
+	Source   string          `njson:"modules.0.source"`
+	Versions []ModuleVersion `njson:"modules.0.versions"`
 }
 
-type Module struct {
-	Versions []struct {
-		Version string `json:"version"`
-	}
+type ModuleVersion struct {
+	Version   string                  `njson:"version"`
+	Providers []ModuleVersionProvider `njson:"root.providers"`
+}
+
+type ModuleVersionProvider struct {
+	Name      string `njson:"name"`
+	Namespace string `njson:"namespace"`
+	Source    string `njson:"source"`
+	Version   string `njson:"version"`
 }
 
 func main() {
@@ -22,16 +32,34 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	var data ModuleVersionsResponse
+	var data ModuleInfo
 
 	body, readErr := ioutil.ReadAll(resp.Body)
 	if readErr != nil {
 		panic(readErr)
 	}
 
-	jsonErr := json.Unmarshal(body, &data)
+	jsonErr := njson.Unmarshal(body, &data)
 	if jsonErr != nil {
 		panic(jsonErr)
 	}
-	fmt.Print(data)
-}
+
+	sample_version, err := semver.NewVersion("2.0.0")
+	if err != nil {
+		panic(err)
+	}
+
+	var inFamilyVersions []*semver.Version
+	for _, ver := range data.Versions {
+		sv, err := semver.NewVersion(ver.Version)
+		if err != nil {
+			panic(err)
+		}
+		if sample_version.Major() == sv.Major() {
+			inFamilyVersions = append(inFamilyVersions, sv)
+		}
+	}
+	sort.Sort(semver.Collection(inFamilyVersions))
+	fmt.Printf("Version [%s] for module [%s] can be bumped to [%s]", sample_version.String(), data.Source, inFamilyVersions[len(inFamilyVersions)-1].String())
+	// TODO: Cross reference provider requirements. 
+	// TODO: interpolate modules from terraform files.

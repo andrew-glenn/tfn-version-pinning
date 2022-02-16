@@ -6,8 +6,16 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	// "github.com/hashicorp/hcl/v2/hclsimple"
+	"io/ioutil"
+	"net/http"
+	"sort"
+
+	"github.com/zclconf/go-cty/cty"
+
+	"github.com/Masterminds/semver"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
 	"github.com/hashicorp/hcl/v2/hclwrite"
+	"github.com/m7shapan/njson"
 )
 
 type ModuleInfo struct {
@@ -34,6 +42,7 @@ type HCLFile struct {
 type HCLModule struct {
 	Source  string
 	Version string
+	Block   *hclwrite.Block
 }
 
 func (module *HCLModule) Local() bool {
@@ -57,59 +66,57 @@ func GetAttributeValue(block *hclwrite.Block, attribute_name string) string {
 	return ""
 }
 
+func SetVersionAttribute(block *hclwrite.Block, attribute_value *semver.Version) bool {
+	body := block.Body()
+	body.SetAttributeValue("version", cty.StringVal(attribute_value.String()))
+	return true
+}
+
 func CreateModule(block *hclwrite.Block) HCLModule {
 	src := GetAttributeValue(block, "source")
 	ver := GetAttributeValue(block, "version")
 	return HCLModule{
 		Source:  src,
 		Version: ver,
+		Block:   block,
 	}
 }
 
-// func DetermineModules(path string) (*HCLFile, error) {
-// 	var hclfile HCLFile
-// 	return &hclfile, hclsimple.DecodeFile(path, nil, &hclfile)
-// }
 
-func main() {
-	// resp, err := http.Get("https://registry.terraform.io/v1/modules/terraform-aws-modules/vpc/aws/versions")
-	// if err != nil {
-	// 	panic(err)
-	// }
-	// var data ModuleInfo
+func GetModuleVersionsFromRegistry(registry_path string) []*semver.Version {
+	resp, err := http.Get("https://registry.terraform.io/v1/modules/" + registry_path + "/versions")
+	if err != nil {
+		panic(err)
+	}
+	var data ModuleInfo
 
-	// body, readErr := ioutil.ReadAll(resp.Body)
-	// if readErr != nil {
-	// 	panic(readErr)
-	// }
+	body, readErr := ioutil.ReadAll(resp.Body)
+	if readErr != nil {
+		panic(readErr)
+	}
 
-	// jsonErr := njson.Unmarshal(body, &data)
-	// if jsonErr != nil {
-	// 	panic(jsonErr)
-	// }
+	jsonErr := njson.Unmarshal(body, &data)
+	if jsonErr != nil {
+		panic(jsonErr)
+	}
 
-	// sample_version, err := semver.NewVersion("2.0.0")
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// var inFamilyVersions []*semver.Version
-	// for _, ver := range data.Versions {
-	// 	sv, err := semver.NewVersion(ver.Version)
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// 	if sample_version.Major() == sv.Major() {
-	// 		inFamilyVersions = append(inFamilyVersions, sv)
-	// 	}
-	// }
-	// sort.Sort(semver.Collection(inFamilyVersions))
-	// fmt.Printf("Version [%s] for module [%s] can be bumped to [%s]", sample_version.String(), data.Source, inFamilyVersions[len(inFamilyVersions)-1].String())
+	var ModuleSemVersions []*semver.Version
+	for _, ver := range data.Versions {
+		sv, err := semver.NewVersion(ver.Version)
+		if err != nil {
+			panic(err)
+		}
+		ModuleSemVersions = append(ModuleSemVersions, sv)
+	}
+	return ModuleSemVersions
 	// TODO: Cross reference provider requirements.
 	// TODO: interpolate modules from terraform files.
+}
+
+func main() {
 
 	var path string
-	path = "/tmp/terraform-aws-route53-recovery-controller/main.tf"
+	path = "/tmp/terraform-aws-rds-aurora/deploy/main.tf"
 	data, err := os.ReadFile(path)
 	if err != nil {
 		panic(err)
@@ -122,9 +129,23 @@ func main() {
 		}
 	}
 	for _, b := range modules {
-		fmt.Printf("Source: %s, Version: %s\n", b.Source, b.Version)
+		var inFamilyVersions []*semver.Version
 		if b.Local() {
-			fmt.Println("- Local module")
+			continue
 		}
+		currentVersion, err := semver.NewVersion(b.Version)
+		if err != nil {
+			panic(err)
+		}
+		for _, v := range GetModuleVersionsFromRegistry(b.Source) {
+			if currentVersion.Major() == v.Major() {
+				inFamilyVersions = append(inFamilyVersions, v)
+			}
+		}
+		sort.Sort(semver.Collection(inFamilyVersions))
+		proposedVersion := inFamilyVersions[len(inFamilyVersions)-1]
+		fmt.Printf("Source: %s, Current pinned Version: %s, Will be upgraded to: %s\n", b.Source, b.Version, proposedVersion.String())
+		SetVersionAttribute(b.Block, proposedVersion)
 	}
+	os.WriteFile(path, hf.Bytes(), 0644)
 }

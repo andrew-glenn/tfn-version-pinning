@@ -6,11 +6,14 @@ import (
 
 	"github.com/hashicorp/hcl/v2"
 	// "github.com/hashicorp/hcl/v2/hclsimple"
+	"flag"
 	"io/ioutil"
 	"net/http"
 	"sort"
 
 	"github.com/zclconf/go-cty/cty"
+
+	"path/filepath"
 
 	"github.com/Masterminds/semver"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
@@ -82,6 +85,27 @@ func CreateModule(block *hclwrite.Block) HCLModule {
 	}
 }
 
+func WalkMatch(root string, pattern string) ([]string, error) {
+	var matches []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+		if matched, err := filepath.Match(pattern, filepath.Base(path)); err != nil {
+			return err
+		} else if matched {
+			matches = append(matches, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return matches, nil
+}
 
 func GetModuleVersionsFromRegistry(registry_path string) []*semver.Version {
 	resp, err := http.Get("https://registry.terraform.io/v1/modules/" + registry_path + "/versions")
@@ -114,38 +138,54 @@ func GetModuleVersionsFromRegistry(registry_path string) []*semver.Version {
 }
 
 func main() {
-
 	var path string
-	path = "/tmp/terraform-aws-rds-aurora/deploy/main.tf"
-	data, err := os.ReadFile(path)
+	cwd, _ := os.Getwd()
+	flag.StringVar(&path, "path", cwd, "path to terraform module")
+	flag.Parse()
+	// path = "/tmp/terraform-aws-rds-aurora/deploy/main.tf"
+	files, err := WalkMatch(path, "*.tf")
 	if err != nil {
 		panic(err)
 	}
-	var modules []HCLModule
-	hf, _ := hclwrite.ParseConfig(data, path, hcl.InitialPos)
-	for _, v := range hf.Body().Blocks() {
-		if v.Type() == "module" {
-			modules = append(modules, CreateModule(v))
-		}
-	}
-	for _, b := range modules {
-		var inFamilyVersions []*semver.Version
-		if b.Local() {
-			continue
-		}
-		currentVersion, err := semver.NewVersion(b.Version)
+
+	for _, path := range files {
+		var changes bool
+		data, err := os.ReadFile(path)
 		if err != nil {
 			panic(err)
 		}
-		for _, v := range GetModuleVersionsFromRegistry(b.Source) {
-			if currentVersion.Major() == v.Major() {
-				inFamilyVersions = append(inFamilyVersions, v)
+		var modules []HCLModule
+		hf, _ := hclwrite.ParseConfig(data, path, hcl.InitialPos)
+		for _, v := range hf.Body().Blocks() {
+			if v.Type() == "module" {
+				modules = append(modules, CreateModule(v))
 			}
 		}
-		sort.Sort(semver.Collection(inFamilyVersions))
-		proposedVersion := inFamilyVersions[len(inFamilyVersions)-1]
-		fmt.Printf("Source: %s, Current pinned Version: %s, Will be upgraded to: %s\n", b.Source, b.Version, proposedVersion.String())
-		SetVersionAttribute(b.Block, proposedVersion)
+		for _, b := range modules {
+			var inFamilyVersions []*semver.Version
+			if b.Local() {
+				continue
+			}
+			currentVersion, err := semver.NewVersion(b.Version)
+			if err != nil {
+				panic(err)
+			}
+			for _, v := range GetModuleVersionsFromRegistry(b.Source) {
+				if currentVersion.Major() == v.Major() {
+					inFamilyVersions = append(inFamilyVersions, v)
+				}
+			}
+			sort.Sort(semver.Collection(inFamilyVersions))
+			proposedVersion := inFamilyVersions[len(inFamilyVersions)-1]
+			if currentVersion == proposedVersion {
+				continue
+			}
+			fmt.Printf("Source: %s, Current pinned Version: %s, Will be upgraded to: %s\n", b.Source, b.Version, proposedVersion.String())
+			changes = true
+			SetVersionAttribute(b.Block, proposedVersion)
+		}
+		if changes {
+			os.WriteFile(path, hclwrite.Format(hf.Bytes()), 0644)
+		}
 	}
-	os.WriteFile(path, hf.Bytes(), 0644)
 }

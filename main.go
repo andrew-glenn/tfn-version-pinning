@@ -1,14 +1,15 @@
 package main
 
+import "github.com/hashicorp/hcl/v2/hclwrite"
+
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"github.com/hashicorp/hcl/v2"
-	"os"
-	// "github.com/hashicorp/hcl/v2/hclsimple"
-	"flag"
 	"io/ioutil"
 	"net/http"
+	"os"
 	"sort"
 
 	"github.com/zclconf/go-cty/cty"
@@ -17,7 +18,6 @@ import (
 
 	"github.com/Masterminds/semver"
 	"github.com/hashicorp/hcl/v2/hclsyntax"
-	"github.com/hashicorp/hcl/v2/hclwrite"
 	"github.com/m7shapan/njson"
 )
 
@@ -228,7 +228,6 @@ func main() {
 	cwd, _ := os.Getwd()
 	flag.StringVar(&path, "path", cwd, "path to terraform module")
 	flag.Parse()
-	// path = "/tmp/terraform-aws-rds-aurora/deploy/main.tf"
 	files, err := WalkMatch(path, "*.tf")
 	if err != nil {
 		panic(err)
@@ -283,14 +282,18 @@ func main() {
 			changes = true
 			SetVersionAttribute(b.Block, proposedVersion)
 		}
-		//if changes {
-		//	os.WriteFile(path, hclwrite.Format(hf.Bytes()), 0644)
-		//}
 
 		for _, m := range providers {
 			if m.Name == "awscc" {
-				m.UserAgent.ProductName.NewValue("blah")
-				m.UserAgent.ProductVersion.NewValue("0.9.1")
+				VersionFileSemver, _ := MostRecentVersionInVersionFile(path)
+				RepoSemVer := MostRecentSemVerForRepo(path)
+				if VersionFileSemver == nil {
+					m.UserAgent.ProductVersion.NewValue(RepoSemVer.String())
+				} else {
+					semvers := []*semver.Version{VersionFileSemver, RepoSemVer}
+					sort.Sort(semver.Collection(semvers))
+					m.UserAgent.ProductVersion.NewValue(semvers[len(semvers)-1].String())
+				}
 				NewTokens := m.UserAgent.GenerateNewTokens()
 				m.Body.SetAttributeRaw("user_agent", NewTokens[2:])
 				changes = true

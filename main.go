@@ -232,7 +232,8 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-
+	VersionFileSemver, _ := MostRecentVersionInVersionFile(path)
+	RepoSemVer := MostRecentSemVerForRepo(path)
 	for _, path := range files {
 		var changes bool
 		data, err := os.ReadFile(path)
@@ -285,8 +286,6 @@ func main() {
 
 		for _, m := range providers {
 			if m.Name == "awscc" {
-				VersionFileSemver, _ := MostRecentVersionInVersionFile(path)
-				RepoSemVer := MostRecentSemVerForRepo(path)
 				if VersionFileSemver == nil {
 					m.UserAgent.ProductVersion.NewValue(RepoSemVer.String())
 				} else {

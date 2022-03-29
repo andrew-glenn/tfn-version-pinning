@@ -28,12 +28,12 @@ func MostRecentSemVerForRepo(path string) *semver.Version {
 }
 
 func MostRecentVersionInVersionFile(path string) (*semver.Version, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path + "/VERSION")
 	if err != nil {
 		return nil, errors.New("Unable to open VERSION file")
 	}
 	ds := string(data)
-	nv, err := semver.NewVersion(ds)
+	nv, err := semver.NewVersion(strings.TrimSuffix(ds, "\n"))
 	if err != nil {
 		return nil, err
 	}
